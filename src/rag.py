@@ -10,8 +10,9 @@ from embedding_lab import MODEL_NAME
 from semantic_search import TOP_K, build_index, load_chunks, search
 
 
-OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
-DEFAULT_LLM_MODEL = "gpt-4o-mini"
+ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_VERSION = "2023-06-01"
+DEFAULT_LLM_MODEL = "claude-3-5-haiku-20241022"
 
 
 def build_context(results):
@@ -46,31 +47,30 @@ PREGUNTA
 
 
 def call_llm(prompt):
-    api_key = os.environ.get("OPENAI_API_KEY")
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise RuntimeError(
-            "Falta la variable de entorno OPENAI_API_KEY. "
+            "Falta la variable de entorno ANTHROPIC_API_KEY. "
             "Definila antes de ejecutar el RAG."
         )
 
-    model = os.environ.get("OPENAI_MODEL", DEFAULT_LLM_MODEL)
+    model = os.environ.get("ANTHROPIC_MODEL", DEFAULT_LLM_MODEL)
     payload = {
         "model": model,
+        "max_tokens": 700,
+        "temperature": 0,
+        "system": "Responde de forma clara y breve. Usa solo el contexto provisto.",
         "messages": [
-            {
-                "role": "system",
-                "content": "Responde de forma clara y breve. Usa solo el contexto provisto.",
-            },
             {"role": "user", "content": prompt},
         ],
-        "temperature": 0,
     }
 
     request = Request(
-        OPENAI_API_URL,
+        ANTHROPIC_API_URL,
         data=json.dumps(payload).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {api_key}",
+            "x-api-key": api_key,
+            "anthropic-version": ANTHROPIC_VERSION,
             "Content-Type": "application/json",
         },
         method="POST",
@@ -86,7 +86,8 @@ def call_llm(prompt):
         raise RuntimeError(f"Error de conexión con el LLM: {error}") from error
 
     data = json.loads(response_body)
-    return data["choices"][0]["message"]["content"].strip()
+    text_blocks = [block["text"] for block in data["content"] if block.get("type") == "text"]
+    return "\n".join(text_blocks).strip()
 
 
 def run_rag(question, debug=False):
