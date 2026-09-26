@@ -1,0 +1,12 @@
+# Local Pi runtime state
+.atl/
+
+# Python virtual environment
+.venv/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# OS/editor files
+.DS_Store
