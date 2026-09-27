@@ -71,3 +71,8 @@ Para clientes hogar, la retención se enfoca en la instalación y en los primero
 Otra estrategia ficticia es la oferta de combinación de servicios. Un cliente móvil pospago puede recibir descuento si agrega internet hogar, y un cliente hogar puede recibir una línea móvil secundaria con bonificación temporal. Estas reglas son inventadas y solo existen para probar recuperación de información.
 
 El equipo de retención mide indicadores sintéticos como tasa de contacto exitoso, porcentaje de casos resueltos y reducción ficticia de Early Churn. Estos indicadores se usarán más adelante para formular preguntas y evaluar si el sistema RAG encuentra los fragmentos relevantes del documento.
+
+## Fibra óptica
+
+Telecom Demo utiliza una red ficticia FTTH con velocidades de hasta 1 Gbps.
+

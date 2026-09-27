@@ -7,7 +7,7 @@ from urllib.request import Request, urlopen
 from sentence_transformers import SentenceTransformer
 
 from embedding_lab import MODEL_NAME
-from semantic_search import TOP_K, build_index, load_chunks, search
+from local_index import TOP_K, load_index, search_records
 
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
@@ -91,16 +91,17 @@ def call_llm(prompt):
 
 
 def run_rag(question, debug=False):
-    chunks = load_chunks()
-    embedding_model = SentenceTransformer(MODEL_NAME)
-    index = build_index(chunks, embedding_model)
+    if debug:
+        print("Cargando embeddings existentes...")
+    index = load_index()
 
-    results, comparison_count, embedding_dimensions = search(
-        question,
-        index,
-        embedding_model,
-        TOP_K,
-    )
+    if debug:
+        print("Generando únicamente embedding de la pregunta...")
+    embedding_model = SentenceTransformer(MODEL_NAME)
+    question_embedding = embedding_model.encode(question)
+    embedding_dimensions = len(question_embedding)
+
+    results, comparison_count = search_records(question_embedding, index, TOP_K)
 
     context = build_context(results)
     prompt = build_prompt(context, question)
@@ -108,7 +109,7 @@ def run_rag(question, debug=False):
     if debug:
         print("=== DEBUG EDUCATIVO ===")
         print(f"Pregunta original: {question}")
-        print(f"Número de chunks: {len(index)}")
+        print(f"Número de chunks en índice: {len(index)}")
         print(f"Dimensiones del embedding: {embedding_dimensions}")
         print(f"Comparaciones realizadas: {comparison_count}")
         print()
