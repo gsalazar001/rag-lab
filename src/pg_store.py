@@ -1,6 +1,7 @@
 import os
 
 import psycopg
+from psycopg import errors
 
 
 DEFAULT_DSN = "dbname=rag_lab"
@@ -47,6 +48,25 @@ def ensure_schema(connection, embedding_dimension):
         )
 
 
+def list_documents(connection):
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT id, source, content_hash FROM documents ORDER BY source;")
+            rows = cursor.fetchall()
+    except errors.UndefinedTable:
+        connection.rollback()
+        return []
+
+    return [
+        {
+            "id": row[0],
+            "source": row[1],
+            "content_hash": row[2],
+        }
+        for row in rows
+    ]
+
+
 def get_document_by_source(connection, source):
     with connection.cursor() as cursor:
         cursor.execute(
@@ -88,6 +108,17 @@ def update_document_hash(connection, document_id, content_hash):
             """,
             (content_hash, document_id),
         )
+
+
+def count_chunks_for_document(connection, document_id):
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM chunks WHERE document_id = %s;", (document_id,))
+        return cursor.fetchone()[0]
+
+
+def delete_document(connection, document_id):
+    with connection.cursor() as cursor:
+        cursor.execute("DELETE FROM documents WHERE id = %s;", (document_id,))
 
 
 def delete_chunks_for_document(connection, document_id):
