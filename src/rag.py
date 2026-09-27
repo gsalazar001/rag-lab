@@ -7,7 +7,8 @@ from urllib.request import Request, urlopen
 from sentence_transformers import SentenceTransformer
 
 from embedding_lab import MODEL_NAME
-from local_index import TOP_K, load_index, search_records
+from local_index import TOP_K
+from pg_store import connect, search_chunks
 
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
@@ -19,7 +20,10 @@ def build_context(results):
     context_parts = []
 
     for result in results:
-        context_parts.append(f"[CHUNK {result['id']}]\n{result['text']}")
+        source = result["metadata"].get("source", "desconocido")
+        context_parts.append(
+            f"[CHUNK {result['chunk_index']} | DOCUMENTO {source}]\n{result['text']}"
+        )
 
     return "\n\n".join(context_parts)
 
@@ -92,16 +96,15 @@ def call_llm(prompt):
 
 def run_rag(question, debug=False):
     if debug:
-        print("Cargando embeddings existentes...")
-    index = load_index()
-
-    if debug:
         print("Generando únicamente embedding de la pregunta...")
     embedding_model = SentenceTransformer(MODEL_NAME)
     question_embedding = embedding_model.encode(question)
     embedding_dimensions = len(question_embedding)
 
-    results, comparison_count = search_records(question_embedding, index, TOP_K)
+    if debug:
+        print("SQL retrieval: búsqueda vectorial en PostgreSQL con pgvector (<=> cosine distance)")
+    with connect() as connection:
+        results = search_chunks(connection, question_embedding, TOP_K)
 
     context = build_context(results)
     prompt = build_prompt(context, question)
@@ -109,14 +112,16 @@ def run_rag(question, debug=False):
     if debug:
         print("=== DEBUG EDUCATIVO ===")
         print(f"Pregunta original: {question}")
-        print(f"Número de chunks en índice: {len(index)}")
-        print(f"Dimensiones del embedding: {embedding_dimensions}")
-        print(f"Comparaciones realizadas: {comparison_count}")
+        print(f"Embedding dimension: {embedding_dimensions}")
         print()
 
-        print("Top-K recuperados:")
+        print(f"TOP {TOP_K}")
         for result in results:
-            print(f"- Chunk ID: {result['id']} | Similarity: {result['similarity']:.4f}")
+            source = result["metadata"].get("source", "desconocido")
+            print(
+                f"Chunk: {result['chunk_index']} | Document: {source} | "
+                f"Similarity: {result['similarity']:.4f}"
+            )
         print()
 
         print("Contexto completo enviado al LLM:")

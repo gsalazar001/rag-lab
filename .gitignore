@@ -10,3 +10,6 @@ __pycache__/
 
 # OS/editor files
 .DS_Store
+
+# Local database credentials/config
+config/*.local.env

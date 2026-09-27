@@ -1,7 +1,8 @@
 from sentence_transformers import SentenceTransformer
 
 from embedding_lab import MODEL_NAME
-from local_index import TOP_K, load_index, search_records
+from local_index import TOP_K
+from pg_store import connect, search_chunks
 
 
 def print_results(results):
@@ -18,8 +19,7 @@ def print_results(results):
 
 
 def main():
-    print("Cargando embeddings existentes...")
-    records = load_index()
+    print("Cargando embeddings existentes desde PostgreSQL + pgvector...")
 
     question = input("Pregunta: ").strip()
     if not question:
@@ -30,9 +30,10 @@ def main():
     model = SentenceTransformer(MODEL_NAME)
     question_embedding = model.encode(question)
 
-    results, comparison_count = search_records(question_embedding, records, TOP_K)
+    with connect() as connection:
+        results = search_chunks(connection, question_embedding, TOP_K)
 
-    print(f"Comparaciones realizadas: {comparison_count}")
+    print(f"Comparaciones delegadas a PostgreSQL/pgvector. Top-K: {TOP_K}")
     print()
     print_results(results)
 
