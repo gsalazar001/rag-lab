@@ -27,12 +27,16 @@ def ensure_schema(connection, embedding_dimension):
             CREATE TABLE IF NOT EXISTS documents (
                 id BIGSERIAL PRIMARY KEY,
                 source TEXT NOT NULL UNIQUE,
+                country TEXT,
+                category TEXT,
                 content_hash TEXT NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             );
             """
         )
+        cursor.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS country TEXT;")
+        cursor.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS category TEXT;")
         cursor.execute(
             f"""
             CREATE TABLE IF NOT EXISTS chunks (
@@ -51,68 +55,110 @@ def ensure_schema(connection, embedding_dimension):
 def list_documents(connection):
     try:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT id, source, content_hash FROM documents ORDER BY source;")
+            cursor.execute(
+                """
+                SELECT id, source, country, category, content_hash
+                FROM documents
+                ORDER BY source;
+                """
+            )
             rows = cursor.fetchall()
     except errors.UndefinedTable:
         connection.rollback()
         return []
+    except errors.UndefinedColumn:
+        connection.rollback()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, source, content_hash
+                FROM documents
+                ORDER BY source;
+                """
+            )
+            rows = cursor.fetchall()
+        return [
+            {
+                "id": row[0],
+                "source": row[1],
+                "country": None,
+                "category": None,
+                "content_hash": row[2],
+            }
+            for row in rows
+        ]
 
     return [
         {
             "id": row[0],
             "source": row[1],
-            "content_hash": row[2],
+            "country": row[2],
+            "category": row[3],
+            "content_hash": row[4],
         }
         for row in rows
     ]
 
 
-def get_document_by_source(connection, source):
-    with connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT id, source, content_hash FROM documents WHERE source = %s;",
-            (source,),
-        )
-        row = cursor.fetchone()
-
-    if row is None:
-        return None
-
-    return {
-        "id": row[0],
-        "source": row[1],
-        "content_hash": row[2],
-    }
-
-
-def insert_document(connection, source, content_hash):
+def insert_document(connection, source, country, category, content_hash):
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            INSERT INTO documents (source, content_hash)
-            VALUES (%s, %s)
+            INSERT INTO documents (source, country, category, content_hash)
+            VALUES (%s, %s, %s, %s)
             RETURNING id;
             """,
-            (source, content_hash),
+            (source, country, category, content_hash),
         )
         return cursor.fetchone()[0]
 
 
-def update_document_hash(connection, document_id, content_hash):
+def update_document(connection, document_id, country, category, content_hash):
     with connection.cursor() as cursor:
         cursor.execute(
             """
             UPDATE documents
-            SET content_hash = %s, updated_at = now()
+            SET country = %s,
+                category = %s,
+                content_hash = %s,
+                updated_at = now()
             WHERE id = %s;
             """,
-            (content_hash, document_id),
+            (country, category, content_hash, document_id),
         )
 
 
 def count_chunks_for_document(connection, document_id):
     with connection.cursor() as cursor:
         cursor.execute("SELECT COUNT(*) FROM chunks WHERE document_id = %s;", (document_id,))
+        return cursor.fetchone()[0]
+
+
+def count_chunks(connection, country=None, category=None):
+    where_clauses = []
+    params = []
+
+    if country:
+        where_clauses.append("documents.country = %s")
+        params.append(country)
+    if category:
+        where_clauses.append("documents.category = %s")
+        params.append(category)
+
+    where_sql = ""
+    if where_clauses:
+        where_sql = "WHERE " + " AND ".join(where_clauses)
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM chunks
+            JOIN documents ON documents.id = chunks.document_id
+            {where_sql};
+            """,
+            params,
+        )
         return cursor.fetchone()[0]
 
 
@@ -138,24 +184,42 @@ def insert_chunks(connection, document_id, chunks, embeddings):
             )
 
 
-def search_chunks(connection, query_embedding, top_k):
+def search_chunks(connection, query_embedding, top_k, country=None, category=None):
     query_vector = vector_literal(query_embedding)
+    where_clauses = []
+    params = [query_vector]
+
+    if country:
+        where_clauses.append("documents.country = %s")
+        params.append(country)
+    if category:
+        where_clauses.append("documents.category = %s")
+        params.append(category)
+
+    where_sql = ""
+    if where_clauses:
+        where_sql = "WHERE " + " AND ".join(where_clauses)
+
+    params.extend([query_vector, top_k])
 
     with connection.cursor() as cursor:
         cursor.execute(
-            """
+            f"""
             SELECT
                 chunks.id,
                 chunks.chunk_index,
                 chunks.content,
                 documents.source,
+                documents.country,
+                documents.category,
                 1 - (chunks.embedding <=> %s::vector) AS similarity
             FROM chunks
             JOIN documents ON documents.id = chunks.document_id
+            {where_sql}
             ORDER BY chunks.embedding <=> %s::vector
             LIMIT %s;
             """,
-            (query_vector, query_vector, top_k),
+            params,
         )
         rows = cursor.fetchall()
 
@@ -164,8 +228,12 @@ def search_chunks(connection, query_embedding, top_k):
             "id": row[0],
             "chunk_index": row[1],
             "text": row[2],
-            "metadata": {"source": row[3]},
-            "similarity": row[4],
+            "metadata": {
+                "source": row[3],
+                "country": row[4],
+                "category": row[5],
+            },
+            "similarity": row[6],
         }
         for row in rows
     ]

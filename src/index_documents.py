@@ -17,7 +17,7 @@ from pg_store import (
     insert_chunks,
     insert_document,
     list_documents,
-    update_document_hash,
+    update_document,
 )
 from recursive_chunk import recursive_chunk
 from semantic_search import OVERLAP, add_overlap
@@ -32,12 +32,22 @@ def sha256_text(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def infer_metadata(source):
+    parts = source.split("/")
+    country = parts[0] if len(parts) >= 2 else None
+    category = Path(parts[-1]).stem
+    return country, category
+
+
 def build_filesystem_record(path):
     source = path.relative_to(KNOWLEDGE_DIR).as_posix()
+    country, category = infer_metadata(source)
     text = path.read_text(encoding="utf-8")
     return {
         "path": path,
         "source": source,
+        "country": country,
+        "category": category,
         "content": text,
         "content_hash": sha256_text(text),
     }
@@ -77,7 +87,11 @@ def classify_git_candidates(git_changes, filesystem_documents, database_document
             action = "DELETE" if database_item is not None else "SKIP"
         elif database_item is None:
             action = "NEW"
-        elif database_item["content_hash"] != filesystem_item["content_hash"]:
+        elif (
+            database_item["content_hash"] != filesystem_item["content_hash"]
+            or database_item.get("country") != filesystem_item.get("country")
+            or database_item.get("category") != filesystem_item.get("category")
+        ):
             action = "UPDATE"
         else:
             action = "SKIP"
@@ -105,7 +119,11 @@ def classify(filesystem_documents, database_documents):
 
         if database_item is None:
             action = "NEW"
-        elif database_item["content_hash"] != filesystem_item["content_hash"]:
+        elif (
+            database_item["content_hash"] != filesystem_item["content_hash"]
+            or database_item.get("country") != filesystem_item.get("country")
+            or database_item.get("category") != filesystem_item.get("category")
+        ):
             action = "UPDATE"
         else:
             action = "SKIP"
@@ -166,6 +184,8 @@ def build_chunks(text):
 def apply_new(connection, item, model):
     source = item["source"]
     content = item["filesystem"]["content"]
+    country = item["filesystem"]["country"]
+    category = item["filesystem"]["category"]
     content_hash = item["filesystem"]["content_hash"]
 
     chunks = build_chunks(content)
@@ -176,7 +196,7 @@ def apply_new(connection, item, model):
     embeddings = model.encode(chunks)
 
     with connection.transaction():
-        document_id = insert_document(connection, source, content_hash)
+        document_id = insert_document(connection, source, country, category, content_hash)
         insert_chunks(connection, document_id, chunks, embeddings)
 
     return len(embeddings)
@@ -186,6 +206,8 @@ def apply_update(connection, item, model):
     source = item["source"]
     document_id = item["database"]["id"]
     content = item["filesystem"]["content"]
+    country = item["filesystem"]["country"]
+    category = item["filesystem"]["category"]
     content_hash = item["filesystem"]["content_hash"]
 
     old_chunk_count = count_chunks_for_document(connection, document_id)
@@ -199,7 +221,7 @@ def apply_update(connection, item, model):
     embeddings = model.encode(chunks)
 
     with connection.transaction():
-        update_document_hash(connection, document_id, content_hash)
+        update_document(connection, document_id, country, category, content_hash)
         delete_chunks_for_document(connection, document_id)
         insert_chunks(connection, document_id, chunks, embeddings)
 

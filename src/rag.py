@@ -8,7 +8,7 @@ from sentence_transformers import SentenceTransformer
 
 from embedding_lab import MODEL_NAME
 from local_index import TOP_K
-from pg_store import connect, search_chunks
+from pg_store import connect, count_chunks, search_chunks
 
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
@@ -21,8 +21,11 @@ def build_context(results):
 
     for result in results:
         source = result["metadata"].get("source", "desconocido")
+        country = result["metadata"].get("country", "desconocido")
+        category = result["metadata"].get("category", "desconocido")
         context_parts.append(
-            f"[CHUNK {result['chunk_index']} | DOCUMENTO {source}]\n{result['text']}"
+            f"[CHUNK {result['chunk_index']} | DOCUMENTO {source} | "
+            f"COUNTRY {country} | CATEGORY {category}]\n{result['text']}"
         )
 
     return "\n\n".join(context_parts)
@@ -94,7 +97,7 @@ def call_llm(prompt):
     return "\n".join(text_blocks).strip()
 
 
-def run_rag(question, debug=False):
+def run_rag(question, debug=False, country=None, category=None):
     if debug:
         print("Generando únicamente embedding de la pregunta...")
     embedding_model = SentenceTransformer(MODEL_NAME)
@@ -104,25 +107,53 @@ def run_rag(question, debug=False):
     if debug:
         print("SQL retrieval: búsqueda vectorial en PostgreSQL con pgvector (<=> cosine distance)")
     with connect() as connection:
-        results = search_chunks(connection, question_embedding, TOP_K)
+        total_chunks = count_chunks(connection)
+        filtered_chunks = count_chunks(connection, country=country, category=category)
+        results = search_chunks(
+            connection,
+            question_embedding,
+            TOP_K,
+            country=country,
+            category=category,
+        )
 
     context = build_context(results)
     prompt = build_prompt(context, question)
 
     if debug:
         print("=== DEBUG EDUCATIVO ===")
-        print(f"Pregunta original: {question}")
+        print("QUESTION")
+        print(question)
+        print()
         print(f"Embedding dimension: {embedding_dimensions}")
         print()
-
-        print(f"TOP {TOP_K}")
-        for result in results:
-            source = result["metadata"].get("source", "desconocido")
-            print(
-                f"Chunk: {result['chunk_index']} | Document: {source} | "
-                f"Similarity: {result['similarity']:.4f}"
-            )
+        print("FILTERS")
+        if country:
+            print(f"country = {country}")
+        if category:
+            print(f"category = {category}")
+        if not country and not category:
+            print("sin filtros")
         print()
+        print("CANDIDATE SPACE")
+        print(f"chunks totales: {total_chunks}")
+        print(f"chunks después del filtro: {filtered_chunks}")
+        print()
+
+        title = f"TOP {TOP_K}"
+        if country or category:
+            print(title)
+        else:
+            print(f"{title} SIN FILTROS")
+        for index, result in enumerate(results, start=1):
+            metadata = result["metadata"]
+            print(f"{index}.")
+            print(f"source: {metadata.get('source', 'desconocido')}")
+            print(f"country: {metadata.get('country', 'desconocido')}")
+            print(f"category: {metadata.get('category', 'desconocido')}")
+            print(f"chunk: {result['chunk_index']}")
+            print(f"similarity: {result['similarity']:.4f}")
+            print()
 
         print("Contexto completo enviado al LLM:")
         print("-" * 40)
@@ -150,6 +181,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Minimal educational RAG pipeline.")
     parser.add_argument("--debug", action="store_true", help="Show retrieval context and final prompt.")
     parser.add_argument("--question", help="Question to ask without interactive input.")
+    parser.add_argument("--country", help="Filter retrieval by document country metadata.")
+    parser.add_argument("--category", help="Filter retrieval by document category metadata.")
     return parser.parse_args()
 
 
@@ -162,7 +195,12 @@ def main():
         return
 
     try:
-        run_rag(question, debug=args.debug)
+        run_rag(
+            question,
+            debug=args.debug,
+            country=args.country,
+            category=args.category,
+        )
     except RuntimeError as error:
         print()
         print(f"ERROR: {error}")
