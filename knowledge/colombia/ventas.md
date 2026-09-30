@@ -13,3 +13,7 @@ Durante un mes ficticio, el 35% de las altas pospago provino del sitio web, el 3
 ## Riesgo comercial
 
 Una promoción mal entendida puede producir reclamos durante los primeros 60 días. Por eso la operación ficticia de Colombia relaciona ventas digitales con seguimiento de retención.
+
+## Códigos comerciales ficticios
+
+BOCAPP-4821 identifica una campaña digital ficticia de la aplicación. PLAN-POST-500 aparece en ventas digitales pospago y puede producir reclamos si la promoción se comunica con palabras ambiguas.

@@ -8,7 +8,13 @@ from sentence_transformers import SentenceTransformer
 
 from embedding_lab import MODEL_NAME
 from local_index import TOP_K
-from pg_store import connect, count_chunks, search_chunks
+from pg_store import (
+    connect,
+    count_chunks,
+    hybrid_search_chunks,
+    text_search_chunks,
+    vector_search_chunks,
+)
 
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
@@ -20,12 +26,16 @@ def build_context(results):
     context_parts = []
 
     for result in results:
-        source = result["metadata"].get("source", "desconocido")
-        country = result["metadata"].get("country", "desconocido")
-        category = result["metadata"].get("category", "desconocido")
+        metadata = result["metadata"]
+        source = metadata.get("source", "desconocido")
+        country = metadata.get("country", "desconocido")
+        category = metadata.get("category", "desconocido")
+        operation = metadata.get("operation", "desconocido")
+        segment = metadata.get("segment", "desconocido")
         context_parts.append(
             f"[CHUNK {result['chunk_index']} | DOCUMENTO {source} | "
-            f"COUNTRY {country} | CATEGORY {category}]\n{result['text']}"
+            f"COUNTRY {country} | CATEGORY {category} | "
+            f"OPERATION {operation} | SEGMENT {segment}]\n{result['text']}"
         )
 
     return "\n\n".join(context_parts)
@@ -97,25 +107,78 @@ def call_llm(prompt):
     return "\n".join(text_blocks).strip()
 
 
-def run_rag(question, debug=False, country=None, category=None):
+def print_result_line(index, result, score_name):
+    metadata = result["metadata"]
+    print(f"{index}.")
+    print(f"chunk: {result['chunk_index']}")
+    print(f"source: {metadata.get('source', 'desconocido')}")
+    print(f"country: {metadata.get('country', 'desconocido')}")
+    print(f"category: {metadata.get('category', 'desconocido')}")
+    print(f"operation: {metadata.get('operation', 'desconocido')}")
+    print(f"segment: {metadata.get('segment', 'desconocido')}")
+    print(f"{score_name}: {result.get(score_name, 0):.4f}")
+    print()
+
+
+def print_debug_results(vector_results, text_results, hybrid_results):
+    print("=== VECTOR SEARCH ===")
+    for index, result in enumerate(vector_results[:TOP_K], start=1):
+        print_result_line(index, result, "vector_score")
+
+    print("=== TEXT SEARCH ===")
+    for index, result in enumerate(text_results[:TOP_K], start=1):
+        print_result_line(index, result, "text_score")
+
+    print("=== HYBRID SEARCH ===")
+    for index, result in enumerate(hybrid_results, start=1):
+        print(f"{index}.")
+        print(f"chunk: {result['chunk_index']}")
+        print(f"source: {result['metadata'].get('source', 'desconocido')}")
+        print(f"country: {result['metadata'].get('country', 'desconocido')}")
+        print(f"category: {result['metadata'].get('category', 'desconocido')}")
+        print(f"operation: {result['metadata'].get('operation', 'desconocido')}")
+        print(f"segment: {result['metadata'].get('segment', 'desconocido')}")
+        print(f"vector_rank: {result.get('vector_rank')}")
+        print(f"text_rank: {result.get('text_rank')}")
+        print(f"rrf_score: {result.get('rrf_score', 0):.6f}")
+        print()
+
+
+def run_rag(question, debug=False, country=None, category=None, operation=None, segment=None, search="hybrid"):
     if debug:
         print("Generando únicamente embedding de la pregunta...")
     embedding_model = SentenceTransformer(MODEL_NAME)
     question_embedding = embedding_model.encode(question)
     embedding_dimensions = len(question_embedding)
 
-    if debug:
-        print("SQL retrieval: búsqueda vectorial en PostgreSQL con pgvector (<=> cosine distance)")
+    filters = {
+        "country": country,
+        "category": category,
+        "operation": operation,
+        "segment": segment,
+    }
+
     with connect() as connection:
         total_chunks = count_chunks(connection)
-        filtered_chunks = count_chunks(connection, country=country, category=category)
-        results = search_chunks(
+        filtered_chunks = count_chunks(connection, **filters)
+
+        if debug:
+            print("SQL retrieval: filtros metadata -> vector search + text search -> RRF")
+
+        vector_results, text_results, hybrid_results = hybrid_search_chunks(
             connection,
+            question,
             question_embedding,
             TOP_K,
-            country=country,
-            category=category,
+            **filters,
         )
+
+        if search == "vector":
+            results = vector_results[:TOP_K]
+        elif search == "text":
+            results = text_results[:TOP_K]
+        else:
+            results = hybrid_results
 
     context = build_context(results)
     prompt = build_prompt(context, question)
@@ -126,40 +189,25 @@ def run_rag(question, debug=False, country=None, category=None):
         print(question)
         print()
         print(f"Embedding dimension: {embedding_dimensions}")
+        print(f"Search mode: {search}")
         print()
         print("FILTERS")
-        if country:
-            print(f"country = {country}")
-        if category:
-            print(f"category = {category}")
-        if not country and not category:
+        active_filters = {key: value for key, value in filters.items() if value}
+        if active_filters:
+            for key, value in active_filters.items():
+                print(f"{key} = {value}")
+        else:
             print("sin filtros")
         print()
         print("CANDIDATE SPACE")
         print(f"chunks totales: {total_chunks}")
         print(f"chunks después del filtro: {filtered_chunks}")
         print()
-
-        title = f"TOP {TOP_K}"
-        if country or category:
-            print(title)
-        else:
-            print(f"{title} SIN FILTROS")
-        for index, result in enumerate(results, start=1):
-            metadata = result["metadata"]
-            print(f"{index}.")
-            print(f"source: {metadata.get('source', 'desconocido')}")
-            print(f"country: {metadata.get('country', 'desconocido')}")
-            print(f"category: {metadata.get('category', 'desconocido')}")
-            print(f"chunk: {result['chunk_index']}")
-            print(f"similarity: {result['similarity']:.4f}")
-            print()
-
+        print_debug_results(vector_results, text_results, hybrid_results)
         print("Contexto completo enviado al LLM:")
         print("-" * 40)
         print(context)
         print()
-
         print("Prompt final:")
         print("-" * 40)
         print(prompt)
@@ -183,6 +231,14 @@ def parse_args():
     parser.add_argument("--question", help="Question to ask without interactive input.")
     parser.add_argument("--country", help="Filter retrieval by document country metadata.")
     parser.add_argument("--category", help="Filter retrieval by document category metadata.")
+    parser.add_argument("--operation", help="Filter retrieval by document operation metadata.")
+    parser.add_argument("--segment", help="Filter retrieval by document segment metadata.")
+    parser.add_argument(
+        "--search",
+        choices=["vector", "text", "hybrid"],
+        default="hybrid",
+        help="Retrieval strategy used to build LLM context.",
+    )
     return parser.parse_args()
 
 
@@ -200,6 +256,9 @@ def main():
             debug=args.debug,
             country=args.country,
             category=args.category,
+            operation=args.operation,
+            segment=args.segment,
+            search=args.search,
         )
     except RuntimeError as error:
         print()

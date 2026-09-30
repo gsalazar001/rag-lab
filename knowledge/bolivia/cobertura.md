@@ -13,3 +13,7 @@ Para hogar, Fibra Altura Demo está disponible en edificios urbanos seleccionado
 ## Relación con churn
 
 La cobertura deficiente durante los primeros 30 días puede aumentar el riesgo ficticio de Early Churn en Bolivia. Los reclamos por señal móvil y baja velocidad hogar se consideran señales tempranas.
+
+## Códigos técnicos ficticios
+
+APN-BO-001 es el identificador ficticio de configuración móvil para Bolivia. Si APN-BO-001 se carga mal, el cliente puede tener datos intermitentes. El incidente ORA-03150 puede aparecer asociado a fallas de navegación posteriores al alta.

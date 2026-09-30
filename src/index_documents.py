@@ -36,18 +36,35 @@ def infer_metadata(source):
     parts = source.split("/")
     country = parts[0] if len(parts) >= 2 else None
     category = Path(parts[-1]).stem
-    return country, category
+
+    # Deterministic lab metadata. Later this could come from frontmatter or a CMS.
+    if category == "churn":
+        operation = "Mobile"
+        segment = "Postpaid"
+    elif category == "cobertura":
+        operation = "Mobile"
+        segment = "All"
+    elif category == "ventas":
+        operation = "Commercial"
+        segment = "All"
+    else:
+        operation = "General"
+        segment = "All"
+
+    return country, category, operation, segment
 
 
 def build_filesystem_record(path):
     source = path.relative_to(KNOWLEDGE_DIR).as_posix()
-    country, category = infer_metadata(source)
+    country, category, operation, segment = infer_metadata(source)
     text = path.read_text(encoding="utf-8")
     return {
         "path": path,
         "source": source,
         "country": country,
         "category": category,
+        "operation": operation,
+        "segment": segment,
         "content": text,
         "content_hash": sha256_text(text),
     }
@@ -91,6 +108,8 @@ def classify_git_candidates(git_changes, filesystem_documents, database_document
             database_item["content_hash"] != filesystem_item["content_hash"]
             or database_item.get("country") != filesystem_item.get("country")
             or database_item.get("category") != filesystem_item.get("category")
+            or database_item.get("operation") != filesystem_item.get("operation")
+            or database_item.get("segment") != filesystem_item.get("segment")
         ):
             action = "UPDATE"
         else:
@@ -123,6 +142,8 @@ def classify(filesystem_documents, database_documents):
             database_item["content_hash"] != filesystem_item["content_hash"]
             or database_item.get("country") != filesystem_item.get("country")
             or database_item.get("category") != filesystem_item.get("category")
+            or database_item.get("operation") != filesystem_item.get("operation")
+            or database_item.get("segment") != filesystem_item.get("segment")
         ):
             action = "UPDATE"
         else:
@@ -186,6 +207,8 @@ def apply_new(connection, item, model):
     content = item["filesystem"]["content"]
     country = item["filesystem"]["country"]
     category = item["filesystem"]["category"]
+    operation = item["filesystem"]["operation"]
+    segment = item["filesystem"]["segment"]
     content_hash = item["filesystem"]["content_hash"]
 
     chunks = build_chunks(content)
@@ -196,7 +219,7 @@ def apply_new(connection, item, model):
     embeddings = model.encode(chunks)
 
     with connection.transaction():
-        document_id = insert_document(connection, source, country, category, content_hash)
+        document_id = insert_document(connection, source, country, category, operation, segment, content_hash)
         insert_chunks(connection, document_id, chunks, embeddings)
 
     return len(embeddings)
@@ -208,6 +231,8 @@ def apply_update(connection, item, model):
     content = item["filesystem"]["content"]
     country = item["filesystem"]["country"]
     category = item["filesystem"]["category"]
+    operation = item["filesystem"]["operation"]
+    segment = item["filesystem"]["segment"]
     content_hash = item["filesystem"]["content_hash"]
 
     old_chunk_count = count_chunks_for_document(connection, document_id)
@@ -221,7 +246,7 @@ def apply_update(connection, item, model):
     embeddings = model.encode(chunks)
 
     with connection.transaction():
-        update_document(connection, document_id, country, category, content_hash)
+        update_document(connection, document_id, country, category, operation, segment, content_hash)
         delete_chunks_for_document(connection, document_id)
         insert_chunks(connection, document_id, chunks, embeddings)
 

@@ -17,3 +17,9 @@ Las causas principales inventadas son congestión en ciudades grandes, expectati
 ## Retención
 
 La retención ficticia en Colombia usa ofertas de continuidad, atención prioritaria por congestión y campañas educativas sobre promociones. Si el cliente reporta problemas repetidos durante los primeros 60 días, se abre un caso preventivo.
+
+## Identificadores operativos ficticios
+
+El código BOCAPP-4821 representa un flujo ficticio de la aplicación Colombia donde el cliente no completa la validación de beneficios. El plan PLAN-POST-500 también existe en Colombia, pero se evalúa dentro de una ventana de Early Churn de 60 días. El incidente INC-93821 se usa aquí como referencia regional para abandono rápido por congestión y reclamos.
+
+El error ORA-03150 puede mencionarse en reportes importados, pero en Colombia se interpreta como una alerta técnica secundaria. La descripción semántica equivalente es: usuarios recientes dejan la compañía porque el servicio inicial no coincide con la expectativa de activación.
