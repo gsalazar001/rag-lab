@@ -7,6 +7,7 @@ from pathlib import Path
 from sentence_transformers import SentenceTransformer
 
 from embedding_lab import MODEL_NAME
+from git_changes import get_git_changes
 from pg_store import (
     connect,
     count_chunks_for_document,
@@ -31,20 +32,66 @@ def sha256_text(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def build_filesystem_record(path):
+    source = path.relative_to(KNOWLEDGE_DIR).as_posix()
+    text = path.read_text(encoding="utf-8")
+    return {
+        "path": path,
+        "source": source,
+        "content": text,
+        "content_hash": sha256_text(text),
+    }
+
+
 def discover_markdown_files():
     files = []
     for path in sorted(KNOWLEDGE_DIR.rglob("*.md")):
-        source = path.relative_to(KNOWLEDGE_DIR).as_posix()
-        text = path.read_text(encoding="utf-8")
-        files.append(
+        files.append(build_filesystem_record(path))
+    return files
+
+
+def discover_git_candidate_files(git_changes):
+    files = []
+    for change in git_changes:
+        if change["action"] == "DELETE":
+            continue
+
+        path = KNOWLEDGE_DIR / change["source"]
+        if path.exists():
+            files.append(build_filesystem_record(path))
+
+    return files
+
+
+def classify_git_candidates(git_changes, filesystem_documents, database_documents):
+    filesystem_by_source = {item["source"]: item for item in filesystem_documents}
+    database_by_source = {item["source"]: item for item in database_documents}
+    plan = []
+
+    for change in git_changes:
+        source = change["source"]
+        filesystem_item = filesystem_by_source.get(source)
+        database_item = database_by_source.get(source)
+
+        if change["action"] == "DELETE" or filesystem_item is None:
+            action = "DELETE" if database_item is not None else "SKIP"
+        elif database_item is None:
+            action = "NEW"
+        elif database_item["content_hash"] != filesystem_item["content_hash"]:
+            action = "UPDATE"
+        else:
+            action = "SKIP"
+
+        plan.append(
             {
-                "path": path,
+                "action": action,
                 "source": source,
-                "content": text,
-                "content_hash": sha256_text(text),
+                "filesystem": filesystem_item,
+                "database": database_item,
             }
         )
-    return files
+
+    return sorted(plan, key=lambda item: item["source"])
 
 
 def classify(filesystem_documents, database_documents):
@@ -93,7 +140,7 @@ def count_actions(plan):
     return counts
 
 
-def print_dry_run(plan, files_scanned):
+def print_dry_run(plan, files_scanned, git_candidates=None):
     counts = count_actions(plan)
 
     for item in plan:
@@ -101,6 +148,8 @@ def print_dry_run(plan, files_scanned):
 
     print()
     print("Resumen:")
+    if git_candidates is not None:
+        print(f"Git candidates: {git_candidates}")
     print(f"Files scanned: {files_scanned}")
     print(f"NEW:     {counts['NEW']}")
     print(f"UPDATE:  {counts['UPDATE']}")
@@ -185,15 +234,23 @@ def apply_plan(plan, files_scanned):
         for item in plan:
             action = item["action"]
 
-            if action == "SKIP":
-                print(f"[SKIP]   {item['source']}")
-            elif action == "NEW":
-                embeddings_generated += apply_new(connection, item, model)
-            elif action == "UPDATE":
-                embeddings_generated += apply_update(connection, item, model)
-            elif action == "DELETE":
-                apply_delete(connection, item)
+            try:
+                if action == "SKIP":
+                    print(f"[SKIP]   {item['source']}")
+                elif action == "NEW":
+                    embeddings_generated += apply_new(connection, item, model)
+                elif action == "UPDATE":
+                    embeddings_generated += apply_update(connection, item, model)
+                elif action == "DELETE":
+                    apply_delete(connection, item)
+            except Exception as error:
+                connection.rollback()
+                raise RuntimeError(f"Falló la indexación de {item['source']}: {error}") from error
 
+    regenerated_documents = counts["NEW"] + counts["UPDATE"]
+    print()
+    print(f"Embeddings regenerados solamente para: {regenerated_documents} documentos")
+    print("El documento eliminado NO genera embeddings.")
     print()
     print("--------------------------------")
     print("INDEXING SUMMARY")
@@ -210,6 +267,7 @@ def apply_plan(plan, files_scanned):
 def parse_args():
     parser = argparse.ArgumentParser(description="Incrementally index Markdown knowledge documents.")
     parser.add_argument("--dry-run", action="store_true", help="Show planned changes without modifying PostgreSQL.")
+    parser.add_argument("--git", action="store_true", help="Use Git changes as indexing candidates.")
     return parser.parse_args()
 
 
@@ -217,15 +275,26 @@ def main():
     args = parse_args()
 
     print(f"Scanning {KNOWLEDGE_DIR.relative_to(PROJECT_ROOT)}/...")
-    filesystem_documents = discover_markdown_files()
 
     with connect() as connection:
         database_documents = list_documents(connection)
 
-    plan = classify(filesystem_documents, database_documents)
+    git_candidate_count = None
+    if args.git:
+        git_changes = get_git_changes()
+        git_candidate_count = len(git_changes)
+        print("Git detectó:")
+        print(f"{git_candidate_count} candidatos")
+        print()
+        print("Validando contra PostgreSQL...")
+        filesystem_documents = discover_git_candidate_files(git_changes)
+        plan = classify_git_candidates(git_changes, filesystem_documents, database_documents)
+    else:
+        filesystem_documents = discover_markdown_files()
+        plan = classify(filesystem_documents, database_documents)
 
     if args.dry_run:
-        print_dry_run(plan, len(filesystem_documents))
+        print_dry_run(plan, len(filesystem_documents), git_candidate_count)
         return
 
     apply_plan(plan, len(filesystem_documents))
